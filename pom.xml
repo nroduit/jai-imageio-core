@@ -3,7 +3,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>org.weasis.thirdparty.com.sun.media</groupId>
 	<artifactId>jai_imageio</artifactId>
-	<version>2.0.0-SNAPSHOT</version>
+	<version>1.3.0-SNAPSHOT</version>
 	<name>Java Advanced Imaging Image I/O Tools</name>
 	<description>
 		JAI Image I/O Tools provides reader, writer, and stream plug-ins for the Java Image I/O Framework and
