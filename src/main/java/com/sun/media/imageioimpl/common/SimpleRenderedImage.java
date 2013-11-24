@@ -87,11 +87,9 @@ public abstract class SimpleRenderedImage implements RenderedImage {
     /** The image's ColorModel. */
     protected ColorModel colorModel;
 
-    /** The image's sources, stored in a Vector. */
-    protected Vector sources = new Vector();
 
     /** A Hashtable containing the image properties. */
-    protected Hashtable properties = new Hashtable();
+    protected Hashtable<String, Object> properties = new Hashtable<String, Object>();
 
     /** Returns the X coordinate of the leftmost column of the image. */
     public int getMinX() {
@@ -259,7 +257,7 @@ public abstract class SimpleRenderedImage implements RenderedImage {
             names = new String[properties.size()];
             int index = 0;
 
-            Enumeration e = properties.keys();
+            Enumeration<String> e = properties.keys();
             while (e.hasMoreElements()) {
                 String name = (String)e.nextElement();
                 names[index++] = name;
@@ -290,7 +288,7 @@ public abstract class SimpleRenderedImage implements RenderedImage {
 
         prefix = prefix.toLowerCase();
 
-        Vector names = new Vector();
+        Vector<String> names = new Vector<String>();
         for (int i = 0; i < propertyNames.length; i++) {
             if (propertyNames[i].startsWith(prefix)) {
                 names.addElement(propertyNames[i]);
@@ -304,7 +302,7 @@ public abstract class SimpleRenderedImage implements RenderedImage {
         // Copy the strings from the Vector over to a String array.
         String prefixNames[] = new String[names.size()];
         int count = 0;
-        for (Iterator it = names.iterator(); it.hasNext(); ) {
+        for (Iterator<String> it = names.iterator(); it.hasNext(); ) {
             prefixNames[count++] = (String)it.next();
         }
 
@@ -405,7 +403,7 @@ public abstract class SimpleRenderedImage implements RenderedImage {
         return ty*tileHeight + tileGridYOffset;
     }
 
-    public Vector getSources() {
+    public Vector<RenderedImage> getSources() {
         return null;
     }
 
@@ -502,7 +500,7 @@ public abstract class SimpleRenderedImage implements RenderedImage {
                     // the tile bounds and the bounds of the requested area.
                     Rectangle tileRect = tile.getBounds();
                     Rectangle intersectRect =
-                        bounds.intersection(tile.getBounds());
+                        bounds.intersection(tileRect);
                     Raster liveRaster = tile.createChild(intersectRect.x,
                                                          intersectRect.y,
                                                          intersectRect.width,
@@ -572,7 +570,7 @@ public abstract class SimpleRenderedImage implements RenderedImage {
                 // the tile bounds and the bounds of the requested area.
                 Rectangle tileRect = tile.getBounds();
                 Rectangle intersectRect =
-                    bounds.intersection(tile.getBounds());
+                    bounds.intersection(tileRect);
                 Raster liveRaster = tile.createChild(intersectRect.x,
                                                      intersectRect.y,
                                                      intersectRect.width,
