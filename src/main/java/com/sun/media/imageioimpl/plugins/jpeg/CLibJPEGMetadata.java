@@ -45,6 +45,7 @@
 
 package com.sun.media.imageioimpl.plugins.jpeg;
 
+import java.awt.Dimension;
 import java.awt.Transparency;
 import java.awt.color.ColorSpace;
 import java.awt.color.ICC_Profile;
@@ -55,6 +56,8 @@ import java.awt.image.DataBuffer;
 import java.awt.image.DataBufferByte;
 import java.awt.image.IndexColorModel;
 import java.awt.image.Raster;
+import java.awt.image.RenderedImage;
+import java.awt.image.SampleModel;
 import java.awt.image.WritableRaster;
 import java.io.ByteArrayInputStream;
 import java.io.EOFException;
@@ -65,25 +68,29 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
-
+import java.util.Map;
+import java.util.SortedMap;
+import java.util.TreeMap;
 import javax.imageio.IIOException;
 import javax.imageio.IIOImage;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
-import javax.imageio.metadata.IIOInvalidTreeException;
+import javax.imageio.ImageTypeSpecifier;
 import javax.imageio.metadata.IIOMetadata;
 import javax.imageio.metadata.IIOMetadataFormatImpl;
 import javax.imageio.metadata.IIOMetadataNode;
+import javax.imageio.metadata.IIOInvalidTreeException;
 import javax.imageio.plugins.jpeg.JPEGHuffmanTable;
 import javax.imageio.plugins.jpeg.JPEGQTable;
 import javax.imageio.stream.ImageInputStream;
 import javax.imageio.stream.MemoryCacheImageInputStream;
-
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
-
 import com.sun.media.imageio.plugins.tiff.BaselineTIFFTagSet;
+import com.sun.media.imageio.plugins.tiff.EXIFGPSTagSet;
+import com.sun.media.imageio.plugins.tiff.EXIFInteroperabilityTagSet;
 import com.sun.media.imageio.plugins.tiff.EXIFParentTIFFTagSet;
+import com.sun.media.imageio.plugins.tiff.EXIFTIFFTagSet;
 import com.sun.media.imageio.plugins.tiff.TIFFDirectory;
 import com.sun.media.imageio.plugins.tiff.TIFFField;
 import com.sun.media.imageio.plugins.tiff.TIFFTag;
@@ -94,10 +101,13 @@ public class CLibJPEGMetadata extends IIOMetadata {
 
     public static final String NATIVE_FORMAT = "javax_imageio_jpeg_image_1.0";
     // XXX Reference to a non-API J2SE class:
-    public static final String NATIVE_FORMAT_CLASS = "com.sun.imageio.plugins.jpeg.JPEGImageMetadataFormat";
+    public static final String NATIVE_FORMAT_CLASS =
+        "com.sun.imageio.plugins.jpeg.JPEGImageMetadataFormat";
 
-    public static final String TIFF_FORMAT = "com_sun_media_imageio_plugins_tiff_image_1.0";
-    public static final String TIFF_FORMAT_CLASS = "com.sun.media.imageioimpl.plugins.tiff.TIFFImageMetadataFormat";
+    public static final String TIFF_FORMAT =
+        "com_sun_media_imageio_plugins_tiff_image_1.0";
+    public static final String TIFF_FORMAT_CLASS =
+        "com.sun.media.imageioimpl.plugins.tiff.TIFFImageMetadataFormat";
 
     // Marker codes from J2SE in numerically increasing order.
 
@@ -117,7 +127,7 @@ public class CLibJPEGMetadata extends IIOMetadata {
     static final int SOF3 = 0xC3;
 
     /** Define Huffman Tables */
-    static final int DHT = 0xC4;
+    static final int DHT = 0xC4;    
 
     // SOF markers for Differential Huffman coding
     /** Differential Sequential DCT */
@@ -231,10 +241,10 @@ public class CLibJPEGMetadata extends IIOMetadata {
     static final int RST_MAX = RST7;
 
     // Specific segment types defined as (code << 8) | X.
-    static final int APP0_JFIF = (APP0 << 8) | 0;
-    static final int APP0_JFXX = (APP0 << 8) | 1;
-    static final int APP1_EXIF = (APP1 << 8) | 0;
-    static final int APP2_ICC = (APP2 << 8) | 0;
+    static final int APP0_JFIF   = (APP0 << 8) | 0;
+    static final int APP0_JFXX   = (APP0 << 8) | 1;
+    static final int APP1_EXIF   = (APP1 << 8) | 0;
+    static final int APP2_ICC    = (APP2 << 8) | 0;
     static final int APP14_ADOBE = (APP14 << 8) | 0;
     static final int UNKNOWN_MARKER = 0xffff;
     static final int SOF_MARKER = (SOF0 << 8) | 0;
@@ -255,39 +265,45 @@ public class CLibJPEGMetadata extends IIOMetadata {
     static final int ADOBE_TRANSFORM_YCCK = 2;
 
     // Zig-zag to natural re-ordering array.
-    static final int[] zigzag = { 0, 1, 5, 6, 14, 15, 27, 28, 2, 4, 7, 13, 16, 26, 29, 42, 3, 8, 12, 17, 25, 30, 41,
-        43, 9, 11, 18, 24, 31, 40, 44, 53, 10, 19, 23, 32, 39, 45, 52, 54, 20, 22, 33, 38, 46, 51, 55, 60, 21, 34, 37,
-        47, 50, 56, 59, 61, 35, 36, 48, 49, 57, 58, 62, 63 };
+    static final int [] zigzag = {
+        0,  1,  5,  6, 14, 15, 27, 28,
+        2,  4,  7, 13, 16, 26, 29, 42,
+        3,  8, 12, 17, 25, 30, 41, 43,
+        9, 11, 18, 24, 31, 40, 44, 53,
+        10, 19, 23, 32, 39, 45, 52, 54,
+        20, 22, 33, 38, 46, 51, 55, 60,
+        21, 34, 37, 47, 50, 56, 59, 61,
+        35, 36, 48, 49, 57, 58, 62, 63
+    };
 
     // --- Static methods ---
 
-    private static IIOImage getThumbnail(ImageInputStream stream, int len, int thumbnailType, int w, int h)
+    private static IIOImage getThumbnail(ImageInputStream stream, int len,
+                                         int thumbnailType, int w, int h)
         throws IOException {
 
         IIOImage result;
 
         long startPos = stream.getStreamPosition();
 
-        if (thumbnailType == THUMBNAIL_JPEG) {
+        if(thumbnailType == THUMBNAIL_JPEG) {
             Iterator readers = ImageIO.getImageReaders(stream);
-            if (readers == null || !readers.hasNext()) {
-                return null;
-            }
-            ImageReader reader = (ImageReader) readers.next();
+            if(readers == null || !readers.hasNext()) return null;
+            ImageReader reader = (ImageReader)readers.next();
             reader.setInput(stream);
             BufferedImage image = reader.read(0, null);
             IIOMetadata metadata = null;
             try {
                 metadata = reader.getImageMetadata(0);
-            } catch (Exception e) {
+            } catch(Exception e) {
                 // Ignore it
             }
             result = new IIOImage(image, null, metadata);
         } else {
             int numBands;
             ColorModel cm;
-            if (thumbnailType == THUMBNAIL_PALETTE) {
-                if (len < 768 + w * h) {
+            if(thumbnailType == THUMBNAIL_PALETTE) {
+                if(len < 768 + w*h) {
                     return null;
                 }
 
@@ -298,7 +314,7 @@ public class CLibJPEGMetadata extends IIOMetadata {
                 byte[] r = new byte[256];
                 byte[] g = new byte[256];
                 byte[] b = new byte[256];
-                for (int i = 0, off = 0; i < 256; i++) {
+                for(int i = 0, off = 0; i < 256; i++) {
                     r[i] = palette[off++];
                     g[i] = palette[off++];
                     b[i] = palette[off++];
@@ -306,21 +322,24 @@ public class CLibJPEGMetadata extends IIOMetadata {
 
                 cm = new IndexColorModel(8, 256, r, g, b);
             } else {
-                if (len < 3 * w * h) {
+                if(len < 3*w*h) {
                     return null;
                 }
 
                 numBands = 3;
 
                 ColorSpace cs = ColorSpace.getInstance(ColorSpace.CS_sRGB);
-                cm = new ComponentColorModel(cs, false, false, Transparency.OPAQUE, DataBuffer.TYPE_BYTE);
+                cm = new ComponentColorModel(cs, false, false,
+                                             Transparency.OPAQUE,
+                                             DataBuffer.TYPE_BYTE);
             }
 
-            byte[] data = new byte[w * h * numBands];
+            byte[] data = new byte[w*h*numBands];
             stream.readFully(data);
             DataBufferByte db = new DataBufferByte(data, data.length);
             WritableRaster wr =
-                Raster.createInterleavedRaster(db, w, h, w * numBands, numBands, new int[] { 0, 1, 2 }, null);
+                Raster.createInterleavedRaster(db, w, h, w*numBands, numBands,
+                                               new int[] {0, 1, 2}, null);
             BufferedImage image = new BufferedImage(cm, wr, false, null);
             result = new IIOImage(image, null, null);
         }
@@ -373,7 +392,7 @@ public class CLibJPEGMetadata extends IIOMetadata {
 
     // Unknown marker segment parameters.
     boolean unknownPresent;
-    List markerTags; // Integers
+    List<Integer> markerTags; // Integers
     List unknownData; // byte[] (NB: 'length' parameter is array length)
 
     // APP14 Adobe marker segment parameters.
@@ -410,7 +429,7 @@ public class CLibJPEGMetadata extends IIOMetadata {
     byte[] exifData = null;
 
     /** Marker codes in the order encountered. */
-    private List markers = null; // List of Integer
+    private List<Integer> markers = null; // List of Integer
 
     // Standard metadata variables.
     private boolean hasAlpha = false;
@@ -420,18 +439,19 @@ public class CLibJPEGMetadata extends IIOMetadata {
     private List thumbnails = new ArrayList();
 
     CLibJPEGMetadata() {
-        super(true, NATIVE_FORMAT, NATIVE_FORMAT_CLASS, new String[] { TIFF_FORMAT },
-            new String[] { TIFF_FORMAT_CLASS });
-
+        super(true, NATIVE_FORMAT, NATIVE_FORMAT_CLASS,
+              new String[] {TIFF_FORMAT}, new String[] {TIFF_FORMAT_CLASS});
+              
         this.isReadOnly = isReadOnly;
     }
 
-    public CLibJPEGMetadata(ImageInputStream stream) throws IIOException {
+    public CLibJPEGMetadata(ImageInputStream stream)
+        throws IIOException {
         this();
 
         try {
             initializeFromStream(stream);
-        } catch (IOException e) {
+        } catch(IOException e) {
             throw new IIOException("Cannot initialize JPEG metadata!", e);
         }
     }
@@ -446,8 +466,8 @@ public class CLibJPEGMetadata extends IIOMetadata {
         int length;
 
         QTable(ImageInputStream stream) throws IOException {
-            elementPrecision = (int) stream.readBits(4);
-            tableID = (int) stream.readBits(4);
+            elementPrecision = (int)stream.readBits(4);
+            tableID = (int)stream.readBits(4);
             byte[] tmp = new byte[QTABLE_SIZE];
             stream.readFully(tmp);
             int[] data = new int[QTABLE_SIZE];
@@ -469,11 +489,11 @@ public class CLibJPEGMetadata extends IIOMetadata {
         int length;
 
         HuffmanTable(ImageInputStream stream) throws IOException {
-            tableClass = (int) stream.readBits(4);
-            tableID = (int) stream.readBits(4);
+            tableClass = (int)stream.readBits(4);
+            tableID = (int)stream.readBits(4);
             short[] lengths = new short[NUM_LENGTHS];
             for (int i = 0; i < NUM_LENGTHS; i++) {
-                lengths[i] = (short) stream.read();
+                lengths[i] = (short)stream.read();
             }
             int numValues = 0;
             for (int i = 0; i < NUM_LENGTHS; i++) {
@@ -481,7 +501,7 @@ public class CLibJPEGMetadata extends IIOMetadata {
             }
             short[] values = new short[numValues];
             for (int i = 0; i < numValues; i++) {
-                values[i] = (short) stream.read();
+                values[i] = (short)stream.read();
             }
             table = new JPEGHuffmanTable(lengths, values);
 
@@ -489,181 +509,204 @@ public class CLibJPEGMetadata extends IIOMetadata {
         }
     }
 
-    private synchronized void initializeFromStream(ImageInputStream iis) throws IOException {
+    private synchronized void initializeFromStream(ImageInputStream iis)
+        throws IOException {
         iis.mark();
         iis.setByteOrder(ByteOrder.BIG_ENDIAN);
 
-        markers = new ArrayList();
+        markers = new ArrayList<Integer>();
 
         boolean isICCProfileValid = true;
         int numICCProfileChunks = 0;
         long[] iccProfileChunkOffsets = null;
         int[] iccProfileChunkLengths = null;
 
-        while (true) {
+        while(true) {
             try {
                 // 0xff denotes a potential marker.
-                if (iis.read() == 0xff) {
+                if(iis.read() == 0xff) {
                     // Get next byte.
                     int code = iis.read();
 
                     // Is a marker if and only if code not in {0x00, 0xff}.
                     // Continue to next marker if this is not a marker or if
                     // it is an empty marker.
-                    if (code == 0x00 || code == 0xff || code == SOI || code == TEM
-                        || (code >= RST_MIN && code <= RST_MAX)) {
+                    if(code == 0x00 || code == 0xff ||
+                       code == SOI || code == TEM ||
+                       (code >= RST_MIN && code <= RST_MAX)) {
                         continue;
                     }
 
                     // If at the end, quit.
-                    if (code == EOI) {
+                    if(code == EOI) {
                         break;
                     }
 
                     // Get the content length.
                     int dataLength = iis.readUnsignedShort() - 2;
 
-                    if (APPN_MIN <= code && code <= APPN_MAX) {
+                    if(APPN_MIN <= code && code <= APPN_MAX) {
                         long pos = iis.getStreamPosition();
                         boolean appnAdded = false;
 
-                        switch (code) {
-                            case APP0:
-                                if (dataLength >= 5) {
-                                    byte[] b = new byte[5];
-                                    iis.readFully(b);
-                                    String id = new String(b);
-                                    if (id.startsWith("JFIF") && !app0JFIFPresent) {
-                                        app0JFIFPresent = true;
-                                        markers.add(new Integer(APP0_JFIF));
-                                        majorVersion = iis.read();
-                                        minorVersion = iis.read();
-                                        resUnits = iis.read();
-                                        Xdensity = iis.readUnsignedShort();
-                                        Ydensity = iis.readUnsignedShort();
-                                        thumbWidth = iis.read();
-                                        thumbHeight = iis.read();
-                                        if (thumbWidth > 0 && thumbHeight > 0) {
-                                            IIOImage imiio =
-                                                getThumbnail(iis, dataLength - 14, THUMBNAIL_RGB, thumbWidth,
-                                                    thumbHeight);
-                                            if (imiio != null) {
-                                                jfifThumbnail = (BufferedImage) imiio.getRenderedImage();
-                                            }
+                        switch(code) {
+                        case APP0:
+                            if(dataLength >= 5) {
+                                byte[] b = new byte[5];
+                                iis.readFully(b);
+                                String id = new String(b);
+                                if(id.startsWith("JFIF") &&
+                                   !app0JFIFPresent) {
+                                    app0JFIFPresent = true;
+                                    markers.add(new Integer(APP0_JFIF));
+                                    majorVersion = iis.read();
+                                    minorVersion = iis.read();
+                                    resUnits = iis.read();
+                                    Xdensity = iis.readUnsignedShort();
+                                    Ydensity = iis.readUnsignedShort();
+                                    thumbWidth = iis.read();
+                                    thumbHeight = iis.read();
+                                    if(thumbWidth > 0 && thumbHeight > 0) {
+                                        IIOImage imiio =
+                                            getThumbnail(iis, dataLength - 14,
+                                                         THUMBNAIL_RGB,
+                                                         thumbWidth,
+                                                         thumbHeight);
+                                        if(imiio != null) {
+                                            jfifThumbnail = (BufferedImage)
+                                                imiio.getRenderedImage();
                                         }
-                                        appnAdded = true;
-                                    } else if (id.startsWith("JFXX")) {
-                                        if (!app0JFXXPresent) {
-                                            extensionCodes = new ArrayList(1);
-                                            jfxxThumbnails = new ArrayList(1);
-                                            app0JFXXPresent = true;
-                                        }
-                                        markers.add(new Integer(APP0_JFXX));
-                                        int extCode = iis.read();
-                                        extensionCodes.add(new Integer(extCode));
-                                        int w = 0, h = 0, offset = 6;
-                                        if (extCode != THUMBNAIL_JPEG) {
-                                            w = iis.read();
-                                            h = iis.read();
-                                            offset += 2;
-                                        }
-                                        IIOImage imiio = getThumbnail(iis, dataLength - offset, extCode, w, h);
-                                        if (imiio != null) {
-                                            jfxxThumbnails.add(imiio);
-                                        }
-                                        appnAdded = true;
                                     }
-                                }
-                                break;
-                            case APP1:
-                                if (dataLength >= 6) {
-                                    byte[] b = new byte[6];
-                                    iis.readFully(b);
-                                    if (b[0] == (byte) 'E' && b[1] == (byte) 'x' && b[2] == (byte) 'i'
-                                        && b[3] == (byte) 'f' && b[4] == (byte) 0 && b[5] == (byte) 0) {
-                                        exifData = new byte[dataLength - 6];
-                                        iis.readFully(exifData);
+                                    appnAdded = true;
+                                } else if(id.startsWith("JFXX")) {
+                                    if(!app0JFXXPresent) {
+                                        extensionCodes = new ArrayList(1);
+                                        jfxxThumbnails = new ArrayList(1);
+                                        app0JFXXPresent = true;
                                     }
-                                }
-                            case APP2:
-                                if (dataLength >= 12) {
-                                    byte[] b = new byte[12];
-                                    iis.readFully(b);
-                                    String id = new String(b);
-                                    if (id.startsWith("ICC_PROFILE")) {
-                                        if (!isICCProfileValid) {
-                                            iis.skipBytes(dataLength - 12);
-                                            continue;
-                                        }
-
-                                        int chunkNum = iis.read();
-                                        int numChunks = iis.read();
-                                        if (numChunks == 0
-                                            || chunkNum == 0
-                                            || chunkNum > numChunks
-                                            || (app2ICCPresent && (numChunks != numICCProfileChunks || iccProfileChunkOffsets[chunkNum] != 0L))) {
-                                            isICCProfileValid = false;
-                                            iis.skipBytes(dataLength - 14);
-                                            continue;
-                                        }
-
-                                        if (!app2ICCPresent) {
-                                            app2ICCPresent = true;
-                                            // Only flag one marker even though
-                                            // multiple may be present.
-                                            markers.add(new Integer(APP2_ICC));
-
-                                            numICCProfileChunks = numChunks;
-
-                                            if (numChunks == 1) {
-                                                b = new byte[dataLength - 14];
-                                                iis.readFully(b);
-                                                profile = ICC_Profile.getInstance(b);
-                                            } else {
-                                                iccProfileChunkOffsets = new long[numChunks + 1];
-                                                iccProfileChunkLengths = new int[numChunks + 1];
-                                                iccProfileChunkOffsets[chunkNum] = iis.getStreamPosition();
-                                                iccProfileChunkLengths[chunkNum] = dataLength - 14;
-                                                iis.skipBytes(dataLength - 14);
-                                            }
-                                        } else {
-                                            iccProfileChunkOffsets[chunkNum] = iis.getStreamPosition();
-                                            iccProfileChunkLengths[chunkNum] = dataLength - 14;
-                                            iis.skipBytes(dataLength - 14);
-                                        }
-
-                                        appnAdded = true;
+                                    markers.add(new Integer(APP0_JFXX));
+                                    int extCode = iis.read();
+                                    extensionCodes.add(new Integer(extCode));
+                                    int w = 0, h = 0, offset = 6;
+                                    if(extCode != THUMBNAIL_JPEG) {
+                                        w = iis.read();
+                                        h = iis.read();
+                                        offset += 2;
                                     }
+                                    IIOImage imiio =
+                                        getThumbnail(iis, dataLength - offset,
+                                                     extCode, w, h);
+                                    if(imiio != null) {
+                                        jfxxThumbnails.add(imiio);
+                                    }
+                                    appnAdded = true;
                                 }
-                                break;
-                            case APP14:
-                                if (dataLength >= 5) {
-                                    byte[] b = new byte[5];
-                                    iis.readFully(b);
-                                    String id = new String(b);
-                                    if (id.startsWith("Adobe") && !app14AdobePresent) { // Adobe segment
-                                        app14AdobePresent = true;
-                                        markers.add(new Integer(APP14_ADOBE));
-                                        version = iis.readUnsignedShort();
-                                        flags0 = iis.readUnsignedShort();
-                                        flags1 = iis.readUnsignedShort();
-                                        transform = iis.read();
+                            }
+                            break;
+                        case APP1:
+                            if(dataLength >= 6) {
+                                byte[] b = new byte[6];
+                                iis.readFully(b);
+                                if(b[0] == (byte)'E' &&
+                                   b[1] == (byte)'x' &&
+                                   b[2] == (byte)'i' &&
+                                   b[3] == (byte)'f' &&
+                                   b[4] == (byte)0 &&
+                                   b[5] == (byte)0) {
+                                    exifData = new byte[dataLength - 6];
+                                    iis.readFully(exifData);
+                                }
+                            }
+                        case APP2:
+                            if(dataLength >= 12) {
+                                byte[] b = new byte[12];
+                                iis.readFully(b);
+                                String id = new String(b);
+                                if(id.startsWith("ICC_PROFILE")) {
+                                    if(!isICCProfileValid) {
                                         iis.skipBytes(dataLength - 12);
-                                        appnAdded = true;
+                                        continue;
                                     }
+
+                                    int chunkNum = iis.read();
+                                    int numChunks = iis.read();
+                                    if(numChunks == 0 ||
+                                       chunkNum == 0 ||
+                                       chunkNum > numChunks ||
+                                       (app2ICCPresent &&
+                                        (numChunks != numICCProfileChunks ||
+                                         iccProfileChunkOffsets[chunkNum]
+                                         != 0L))) {
+                                        isICCProfileValid = false;
+                                        iis.skipBytes(dataLength - 14);
+                                        continue;
+                                    }
+
+                                    if(!app2ICCPresent) {
+                                        app2ICCPresent = true;
+                                        // Only flag one marker even though
+                                        // multiple may be present.
+                                        markers.add(new Integer(APP2_ICC));
+
+                                        numICCProfileChunks = numChunks;
+
+                                        if(numChunks == 1) {
+                                            b = new byte[dataLength - 14];
+                                            iis.readFully(b);
+                                            profile =
+                                                ICC_Profile.getInstance(b);
+                                        } else {
+                                            iccProfileChunkOffsets =
+                                                new long[numChunks + 1];
+                                            iccProfileChunkLengths =
+                                                new int[numChunks + 1];
+                                            iccProfileChunkOffsets[chunkNum] =
+                                                iis.getStreamPosition();
+                                            iccProfileChunkLengths[chunkNum] =
+                                                dataLength - 14;
+                                            iis.skipBytes(dataLength - 14);
+                                        }
+                                    } else {
+                                        iccProfileChunkOffsets[chunkNum] =
+                                            iis.getStreamPosition();
+                                        iccProfileChunkLengths[chunkNum] =
+                                            dataLength - 14;
+                                        iis.skipBytes(dataLength - 14);
+                                    }
+
+                                    appnAdded = true;
                                 }
-                                break;
-                            default:
-                                appnAdded = false;
-                                break;
+                            }
+                            break;
+                        case APP14:
+                            if(dataLength >= 5) {
+                                byte[] b = new byte[5];
+                                iis.readFully(b);
+                                String id = new String(b);
+                                if(id.startsWith("Adobe") &&
+                                   !app14AdobePresent) { // Adobe segment
+                                    app14AdobePresent = true;
+                                    markers.add(new Integer(APP14_ADOBE));
+                                    version = iis.readUnsignedShort();
+                                    flags0 = iis.readUnsignedShort();
+                                    flags1 = iis.readUnsignedShort();
+                                    transform = iis.read();
+                                    iis.skipBytes(dataLength - 12);
+                                    appnAdded = true;
+                                }
+                            }
+                            break;
+                        default:
+                            appnAdded = false;
+                            break;
                         }
 
-                        if (!appnAdded) {
+                        if(!appnAdded) {
                             iis.seek(pos);
                             addUnknownMarkerSegment(iis, code, dataLength);
                         }
-                    } else if (code == DQT) {
-                        if (!dqtPresent) {
+                    } else if(code == DQT) {
+                        if(!dqtPresent) {
                             dqtPresent = true;
                             qtables = new ArrayList(1);
                         }
@@ -673,10 +716,10 @@ public class CLibJPEGMetadata extends IIOMetadata {
                             QTable t = new QTable(iis);
                             l.add(t);
                             dataLength -= t.length;
-                        } while (dataLength > 0);
+                        } while(dataLength > 0);
                         qtables.add(l);
-                    } else if (code == DHT) {
-                        if (!dhtPresent) {
+                    } else if(code == DHT) {
+                        if(!dhtPresent) {
                             dhtPresent = true;
                             htables = new ArrayList(1);
                         }
@@ -686,16 +729,16 @@ public class CLibJPEGMetadata extends IIOMetadata {
                             HuffmanTable t = new HuffmanTable(iis);
                             l.add(t);
                             dataLength -= t.length;
-                        } while (dataLength > 0);
+                        } while(dataLength > 0);
                         htables.add(l);
-                    } else if (code == DRI) {
-                        if (!driPresent) {
+                    } else if(code == DRI) {
+                        if(!driPresent) {
                             driPresent = true;
                         }
                         markers.add(new Integer(DRI));
                         driInterval = iis.readUnsignedShort();
-                    } else if (code == COM) {
-                        if (!comPresent) {
+                    } else if(code == COM) {
+                        if(!comPresent) {
                             comPresent = true;
                             comments = new ArrayList(1);
                         }
@@ -703,8 +746,9 @@ public class CLibJPEGMetadata extends IIOMetadata {
                         byte[] b = new byte[dataLength];
                         iis.readFully(b);
                         comments.add(b);
-                    } else if ((code >= SOFN_MIN && code <= SOFN_MAX) || code == SOF55) { // SOFn
-                        if (!sofPresent) {
+                    } else if((code >= SOFN_MIN && code <= SOFN_MAX) ||
+                              code == SOF55) { // SOFn
+                        if(!sofPresent) {
                             sofPresent = true;
                             sofProcess = code - SOFN_MIN;
                             samplePrecision = iis.read();
@@ -715,30 +759,30 @@ public class CLibJPEGMetadata extends IIOMetadata {
                             hSamplingFactor = new int[numFrameComponents];
                             vSamplingFactor = new int[numFrameComponents];
                             qtableSelector = new int[numFrameComponents];
-                            for (int i = 0; i < numFrameComponents; i++) {
+                            for(int i = 0; i < numFrameComponents; i++) {
                                 componentId[i] = iis.read();
-                                hSamplingFactor[i] = (int) iis.readBits(4);
-                                vSamplingFactor[i] = (int) iis.readBits(4);
+                                hSamplingFactor[i] = (int)iis.readBits(4);
+                                vSamplingFactor[i] = (int)iis.readBits(4);
                                 qtableSelector[i] = iis.read();
                             }
                             markers.add(new Integer(SOF_MARKER));
                         }
-                    } else if (code == SOS) {
-                        if (!sosPresent) {
+                    } else if(code == SOS) {
+                        if(!sosPresent) {
                             sosPresent = true;
                             numScanComponents = iis.read();
                             componentSelector = new int[numScanComponents];
                             dcHuffTable = new int[numScanComponents];
                             acHuffTable = new int[numScanComponents];
-                            for (int i = 0; i < numScanComponents; i++) {
+                            for(int i = 0; i < numScanComponents; i++) {
                                 componentSelector[i] = iis.read();
-                                dcHuffTable[i] = (int) iis.readBits(4);
-                                acHuffTable[i] = (int) iis.readBits(4);
+                                dcHuffTable[i] = (int)iis.readBits(4);
+                                acHuffTable[i] = (int)iis.readBits(4);
                             }
                             startSpectralSelection = iis.read();
                             endSpectralSelection = iis.read();
-                            approxHigh = (int) iis.readBits(4);
-                            approxLow = (int) iis.readBits(4);
+                            approxHigh = (int)iis.readBits(4);
+                            approxLow = (int)iis.readBits(4);
                             markers.add(new Integer(SOS));
                         }
                         break;
@@ -746,26 +790,26 @@ public class CLibJPEGMetadata extends IIOMetadata {
                         addUnknownMarkerSegment(iis, code, dataLength);
                     }
                 }
-            } catch (EOFException eofe) {
+            } catch(EOFException eofe) {
                 // XXX Should this be caught?
                 break;
             }
         }
 
-        if (app2ICCPresent && isICCProfileValid && profile == null) {
+        if(app2ICCPresent && isICCProfileValid && profile == null) {
             int profileDataLength = 0;
-            for (int i = 1; i <= numICCProfileChunks; i++) {
-                if (iccProfileChunkOffsets[i] == 0L) {
+            for(int i = 1; i <= numICCProfileChunks; i++) {
+                if(iccProfileChunkOffsets[i] == 0L) {
                     isICCProfileValid = false;
                     break;
                 }
                 profileDataLength += iccProfileChunkLengths[i];
             }
 
-            if (isICCProfileValid) {
+            if(isICCProfileValid) {
                 byte[] b = new byte[profileDataLength];
                 int off = 0;
-                for (int i = 1; i <= numICCProfileChunks; i++) {
+                for(int i = 1; i <= numICCProfileChunks; i++) {
                     iis.seek(iccProfileChunkOffsets[i]);
                     iis.read(b, off, iccProfileChunkLengths[i]);
                     off += iccProfileChunkLengths[i];
@@ -778,10 +822,12 @@ public class CLibJPEGMetadata extends IIOMetadata {
         iis.reset();
     }
 
-    private void addUnknownMarkerSegment(ImageInputStream stream, int code, int len) throws IOException {
-        if (!unknownPresent) {
+    private void addUnknownMarkerSegment(ImageInputStream stream,
+                                         int code, int len)
+        throws IOException {
+        if(!unknownPresent) {
             unknownPresent = true;
-            markerTags = new ArrayList(1);
+            markerTags = new ArrayList<Integer>(1);
             unknownData = new ArrayList(1);
         }
         markerTags.add(new Integer(code));
@@ -791,34 +837,32 @@ public class CLibJPEGMetadata extends IIOMetadata {
         markers.add(new Integer(UNKNOWN_MARKER));
     }
 
-    @Override
     public boolean isReadOnly() {
         return isReadOnly;
     }
 
-    @Override
     public Node getAsTree(String formatName) {
         if (formatName.equals(nativeMetadataFormatName)) {
             return getNativeTree();
-        } else if (formatName.equals(IIOMetadataFormatImpl.standardMetadataFormatName)) {
+        } else if (formatName.equals
+                   (IIOMetadataFormatImpl.standardMetadataFormatName)) {
             return getStandardTree();
-        } else if (formatName.equals(TIFF_FORMAT)) {
+        } else if(formatName.equals(TIFF_FORMAT)) {
             return getTIFFTree();
         } else {
             throw new IllegalArgumentException("Not a recognized format!");
         }
     }
 
-    @Override
-    public void mergeTree(String formatName, Node root) throws IIOInvalidTreeException {
-        if (isReadOnly) {
+    public void mergeTree(String formatName, Node root)
+        throws IIOInvalidTreeException {
+        if(isReadOnly) {
             throw new IllegalStateException("isReadOnly() == true!");
         }
     }
 
-    @Override
     public void reset() {
-        if (isReadOnly) {
+        if(isReadOnly) {
             throw new IllegalStateException("isReadOnly() == true!");
         }
     }
@@ -841,166 +885,200 @@ public class CLibJPEGMetadata extends IIOMetadata {
         root.appendChild(markerSequence);
 
         IIOMetadataNode app0JFIF = null;
-        if (app0JFIFPresent || app0JFXXPresent || app2ICCPresent) {
+        if(app0JFIFPresent || app0JFXXPresent || app2ICCPresent) {
             app0JFIF = new IIOMetadataNode("app0JFIF");
-            app0JFIF.setAttribute("majorVersion", Integer.toString(majorVersion));
-            app0JFIF.setAttribute("minorVersion", Integer.toString(minorVersion));
-            app0JFIF.setAttribute("resUnits", Integer.toString(resUnits));
-            app0JFIF.setAttribute("Xdensity", Integer.toString(Xdensity));
-            app0JFIF.setAttribute("Ydensity", Integer.toString(Ydensity));
-            app0JFIF.setAttribute("thumbWidth", Integer.toString(thumbWidth));
-            app0JFIF.setAttribute("thumbHeight", Integer.toString(thumbHeight));
+            app0JFIF.setAttribute("majorVersion",
+                                  Integer.toString(majorVersion));
+            app0JFIF.setAttribute("minorVersion",
+                                  Integer.toString(minorVersion));
+            app0JFIF.setAttribute("resUnits",
+                                  Integer.toString(resUnits));
+            app0JFIF.setAttribute("Xdensity",
+                                  Integer.toString(Xdensity));
+            app0JFIF.setAttribute("Ydensity",
+                                  Integer.toString(Ydensity));
+            app0JFIF.setAttribute("thumbWidth",
+                                  Integer.toString(thumbWidth));
+            app0JFIF.setAttribute("thumbHeight",
+                                  Integer.toString(thumbHeight));
             JPEGvariety.appendChild(app0JFIF);
         }
 
         IIOMetadataNode JFXX = null;
-        if (app0JFXXPresent) {
+        if(app0JFXXPresent) {
             JFXX = new IIOMetadataNode("JFXX");
             app0JFIF.appendChild(JFXX);
         }
 
         Iterator markerIter = markers.iterator();
-        while (markerIter.hasNext()) {
-            int marker = ((Integer) markerIter.next()).intValue();
-            switch (marker) {
-                case APP0_JFIF:
-                    // Do nothing: already handled above.
+        while(markerIter.hasNext()) {
+            int marker = ((Integer)markerIter.next()).intValue();
+            switch(marker) {
+            case APP0_JFIF:
+                // Do nothing: already handled above.
+                break;
+            case APP0_JFXX:
+                IIOMetadataNode app0JFXX = new IIOMetadataNode("app0JFXX");
+                Integer extensionCode = (Integer)extensionCodes.get(jfxxIndex);
+                app0JFXX.setAttribute("extensionCode",
+                                      extensionCode.toString());
+                IIOMetadataNode JFIFthumb = null;
+                switch(extensionCode.intValue()) {
+                case THUMBNAIL_JPEG:
+                    JFIFthumb = new IIOMetadataNode("JFIFthumbJPEG");
                     break;
-                case APP0_JFXX:
-                    IIOMetadataNode app0JFXX = new IIOMetadataNode("app0JFXX");
-                    Integer extensionCode = (Integer) extensionCodes.get(jfxxIndex);
-                    app0JFXX.setAttribute("extensionCode", extensionCode.toString());
-                    IIOMetadataNode JFIFthumb = null;
-                    switch (extensionCode.intValue()) {
-                        case THUMBNAIL_JPEG:
-                            JFIFthumb = new IIOMetadataNode("JFIFthumbJPEG");
-                            break;
-                        case THUMBNAIL_PALETTE:
-                            JFIFthumb = new IIOMetadataNode("JFIFthumbPalette");
-                            break;
-                        case THUMBNAIL_RGB:
-                            JFIFthumb = new IIOMetadataNode("JFIFthumbRGB");
-                            break;
-                        default:
-                            // No JFIFthumb node will be appended.
-                    }
-                    if (JFIFthumb != null) {
-                        IIOImage img = (IIOImage) jfxxThumbnails.get(jfxxIndex++);
-                        if (extensionCode.intValue() == THUMBNAIL_JPEG) {
-                            IIOMetadata thumbMetadata = img.getMetadata();
-                            if (thumbMetadata != null) {
-                                Node thumbTree = thumbMetadata.getAsTree(nativeMetadataFormatName);
-                                if (thumbTree instanceof IIOMetadataNode) {
-                                    IIOMetadataNode elt = (IIOMetadataNode) thumbTree;
-                                    NodeList elts = elt.getElementsByTagName("markerSequence");
-                                    if (elts.getLength() > 0) {
-                                        JFIFthumb.appendChild(elts.item(0));
-                                    }
+                case THUMBNAIL_PALETTE:
+                    JFIFthumb = new IIOMetadataNode("JFIFthumbPalette");
+                    break;
+                case THUMBNAIL_RGB:
+                    JFIFthumb = new IIOMetadataNode("JFIFthumbRGB");
+                    break;
+                default:
+                    // No JFIFthumb node will be appended.
+                }
+                if(JFIFthumb != null) {
+                    IIOImage img = (IIOImage)jfxxThumbnails.get(jfxxIndex++);
+                    if(extensionCode.intValue() == THUMBNAIL_JPEG) {
+                        IIOMetadata thumbMetadata = img.getMetadata();
+                        if(thumbMetadata != null) {
+                            Node thumbTree =
+                                thumbMetadata.getAsTree(nativeMetadataFormatName);
+                            if(thumbTree instanceof IIOMetadataNode) {
+                                IIOMetadataNode elt =
+                                    (IIOMetadataNode)thumbTree;
+                                NodeList elts =
+                                    elt.getElementsByTagName("markerSequence");
+                                if(elts.getLength() > 0) {
+                                    JFIFthumb.appendChild(elts.item(0));
                                 }
                             }
-                        } else {
-                            BufferedImage thumb = (BufferedImage) img.getRenderedImage();
-                            JFIFthumb.setAttribute("thumbWidth", Integer.toString(thumb.getWidth()));
-                            JFIFthumb.setAttribute("thumbHeight", Integer.toString(thumb.getHeight()));
                         }
-                        // Add thumbnail as a user object even though not in
-                        // metadata specification.
-                        JFIFthumb.setUserObject(img);
-                        app0JFXX.appendChild(JFIFthumb);
+                    } else {
+                        BufferedImage thumb =
+                            (BufferedImage)img.getRenderedImage();
+                        JFIFthumb.setAttribute("thumbWidth",
+                                               Integer.toString(thumb.getWidth()));
+                        JFIFthumb.setAttribute("thumbHeight",
+                                               Integer.toString(thumb.getHeight()));
                     }
-                    JFXX.appendChild(app0JFXX);
-                    break;
-                case APP2_ICC:
-                    IIOMetadataNode app2ICC = new IIOMetadataNode("app2ICC");
-                    app2ICC.setUserObject(profile);
-                    app0JFIF.appendChild(app2ICC);
-                    break;
-                case DQT:
-                    IIOMetadataNode dqt = new IIOMetadataNode("dqt");
-                    List tables = (List) qtables.get(dqtIndex++);
-                    int numTables = tables.size();
-                    for (int j = 0; j < numTables; j++) {
-                        IIOMetadataNode dqtable = new IIOMetadataNode("dqtable");
-                        QTable t = (QTable) tables.get(j);
-                        dqtable.setAttribute("elementPrecision", Integer.toString(t.elementPrecision));
-                        dqtable.setAttribute("qtableId", Integer.toString(t.tableID));
-                        dqtable.setUserObject(t.table);
-                        dqt.appendChild(dqtable);
-                    }
-                    markerSequence.appendChild(dqt);
-                    break;
-                case DHT:
-                    IIOMetadataNode dht = new IIOMetadataNode("dht");
-                    tables = (List) htables.get(dhtIndex++);
-                    numTables = tables.size();
-                    for (int j = 0; j < numTables; j++) {
-                        IIOMetadataNode dhtable = new IIOMetadataNode("dhtable");
-                        HuffmanTable t = (HuffmanTable) tables.get(j);
-                        dhtable.setAttribute("class", Integer.toString(t.tableClass));
-                        dhtable.setAttribute("htableId", Integer.toString(t.tableID));
-                        dhtable.setUserObject(t.table);
-                        dht.appendChild(dhtable);
-                    }
-                    markerSequence.appendChild(dht);
-                    break;
-                case DRI:
-                    IIOMetadataNode dri = new IIOMetadataNode("dri");
-                    dri.setAttribute("interval", Integer.toString(driInterval));
-                    markerSequence.appendChild(dri);
-                    break;
-                case COM:
-                    IIOMetadataNode com = new IIOMetadataNode("com");
-                    com.setUserObject(comments.get(comIndex++));
-                    markerSequence.appendChild(com);
-                    break;
-                case UNKNOWN_MARKER:
-                    IIOMetadataNode unknown = new IIOMetadataNode("unknown");
-                    Integer markerTag = (Integer) markerTags.get(unknownIndex);
-                    unknown.setAttribute("MarkerTag", markerTag.toString());
-                    unknown.setUserObject(unknownData.get(unknownIndex++));
-                    markerSequence.appendChild(unknown);
-                    break;
-                case APP14_ADOBE:
-                    IIOMetadataNode app14Adobe = new IIOMetadataNode("app14Adobe");
-                    app14Adobe.setAttribute("version", Integer.toString(version));
-                    app14Adobe.setAttribute("flags0", Integer.toString(flags0));
-                    app14Adobe.setAttribute("flags1", Integer.toString(flags1));
-                    app14Adobe.setAttribute("transform", Integer.toString(transform));
-                    markerSequence.appendChild(app14Adobe);
-                    break;
-                case SOF_MARKER:
-                    IIOMetadataNode sof = new IIOMetadataNode("sof");
-                    sof.setAttribute("process", Integer.toString(sofProcess));
-                    sof.setAttribute("samplePrecision", Integer.toString(samplePrecision));
-                    sof.setAttribute("numLines", Integer.toString(numLines));
-                    sof.setAttribute("samplesPerLine", Integer.toString(samplesPerLine));
-                    sof.setAttribute("numFrameComponents", Integer.toString(numFrameComponents));
-                    for (int i = 0; i < numFrameComponents; i++) {
-                        IIOMetadataNode componentSpec = new IIOMetadataNode("componentSpec");
-                        componentSpec.setAttribute("componentId", Integer.toString(componentId[i]));
-                        componentSpec.setAttribute("HsamplingFactor", Integer.toString(hSamplingFactor[i]));
-                        componentSpec.setAttribute("VsamplingFactor", Integer.toString(vSamplingFactor[i]));
-                        componentSpec.setAttribute("QtableSelector", Integer.toString(qtableSelector[i]));
-                        sof.appendChild(componentSpec);
-                    }
-                    markerSequence.appendChild(sof);
-                    break;
-                case SOS:
-                    IIOMetadataNode sos = new IIOMetadataNode("sos");
-                    sos.setAttribute("numScanComponents", Integer.toString(numScanComponents));
-                    sos.setAttribute("startSpectralSelection", Integer.toString(startSpectralSelection));
-                    sos.setAttribute("endSpectralSelection", Integer.toString(endSpectralSelection));
-                    sos.setAttribute("approxHigh", Integer.toString(approxHigh));
-                    sos.setAttribute("approxLow", Integer.toString(approxLow));
-                    for (int i = 0; i < numScanComponents; i++) {
-                        IIOMetadataNode scanComponentSpec = new IIOMetadataNode("scanComponentSpec");
-                        scanComponentSpec.setAttribute("componentSelector", Integer.toString(componentSelector[i]));
-                        scanComponentSpec.setAttribute("dcHuffTable", Integer.toString(dcHuffTable[i]));
-                        scanComponentSpec.setAttribute("acHuffTable", Integer.toString(acHuffTable[i]));
-                        sos.appendChild(scanComponentSpec);
-                    }
-                    markerSequence.appendChild(sos);
-                    break;
+                    // Add thumbnail as a user object even though not in
+                    // metadata specification.
+                    JFIFthumb.setUserObject(img);
+                    app0JFXX.appendChild(JFIFthumb);
+                }
+                JFXX.appendChild(app0JFXX);
+                break;
+            case APP2_ICC:
+                IIOMetadataNode app2ICC = new IIOMetadataNode("app2ICC");
+                app2ICC.setUserObject(profile);
+                app0JFIF.appendChild(app2ICC);
+                break;
+            case DQT:
+                IIOMetadataNode dqt = new IIOMetadataNode("dqt");
+                List tables = (List)qtables.get(dqtIndex++);
+                int numTables = tables.size();
+                for(int j = 0; j < numTables; j++) {
+                    IIOMetadataNode dqtable = new IIOMetadataNode("dqtable");
+                    QTable t = (QTable)tables.get(j);
+                    dqtable.setAttribute("elementPrecision",
+                                         Integer.toString(t.elementPrecision));
+                    dqtable.setAttribute("qtableId",
+                                         Integer.toString(t.tableID));
+                    dqtable.setUserObject(t.table);
+                    dqt.appendChild(dqtable);                    
+                }
+                markerSequence.appendChild(dqt);
+                break;
+            case DHT:
+                IIOMetadataNode dht = new IIOMetadataNode("dht");
+                tables = (List)htables.get(dhtIndex++);
+                numTables = tables.size();
+                for(int j = 0; j < numTables; j++) {
+                    IIOMetadataNode dhtable = new IIOMetadataNode("dhtable");
+                    HuffmanTable t = (HuffmanTable)tables.get(j);
+                    dhtable.setAttribute("class",
+                                         Integer.toString(t.tableClass));
+                    dhtable.setAttribute("htableId",
+                                         Integer.toString(t.tableID));
+                    dhtable.setUserObject(t.table);
+                    dht.appendChild(dhtable);                    
+                }
+                markerSequence.appendChild(dht);
+                break;
+            case DRI:
+                IIOMetadataNode dri = new IIOMetadataNode("dri");
+                dri.setAttribute("interval", Integer.toString(driInterval));
+                markerSequence.appendChild(dri);
+                break;
+            case COM:
+                IIOMetadataNode com = new IIOMetadataNode("com");
+                com.setUserObject(comments.get(comIndex++));
+                markerSequence.appendChild(com);
+                break;
+            case UNKNOWN_MARKER:
+                IIOMetadataNode unknown = new IIOMetadataNode("unknown");
+                Integer markerTag = (Integer)markerTags.get(unknownIndex);
+                unknown.setAttribute("MarkerTag", markerTag.toString());
+                unknown.setUserObject(unknownData.get(unknownIndex++));
+                markerSequence.appendChild(unknown);
+                break;
+            case APP14_ADOBE:
+                IIOMetadataNode app14Adobe = new IIOMetadataNode("app14Adobe");
+                app14Adobe.setAttribute("version", Integer.toString(version));
+                app14Adobe.setAttribute("flags0", Integer.toString(flags0));
+                app14Adobe.setAttribute("flags1", Integer.toString(flags1));
+                app14Adobe.setAttribute("transform",
+                                        Integer.toString(transform));
+                markerSequence.appendChild(app14Adobe);
+                break;
+            case SOF_MARKER:
+                IIOMetadataNode sof = new IIOMetadataNode("sof");
+                sof.setAttribute("process", Integer.toString(sofProcess));
+                sof.setAttribute("samplePrecision",
+                                 Integer.toString(samplePrecision));
+                sof.setAttribute("numLines", Integer.toString(numLines));
+                sof.setAttribute("samplesPerLine",
+                                 Integer.toString(samplesPerLine));
+                sof.setAttribute("numFrameComponents",
+                                 Integer.toString(numFrameComponents));
+                for(int i = 0; i < numFrameComponents; i++) {
+                    IIOMetadataNode componentSpec =
+                        new IIOMetadataNode("componentSpec");
+                    componentSpec.setAttribute("componentId",
+                                               Integer.toString(componentId[i]));
+                    componentSpec.setAttribute("HsamplingFactor",
+                                               Integer.toString(hSamplingFactor[i]));
+                    componentSpec.setAttribute("VsamplingFactor",
+                                               Integer.toString(vSamplingFactor[i]));
+                    componentSpec.setAttribute("QtableSelector",
+                                               Integer.toString(qtableSelector[i]));
+                    sof.appendChild(componentSpec);
+                }
+                markerSequence.appendChild(sof);
+                break;
+            case SOS:
+                IIOMetadataNode sos = new IIOMetadataNode("sos");
+                sos.setAttribute("numScanComponents",
+                                 Integer.toString(numScanComponents));
+                sos.setAttribute("startSpectralSelection",
+                                 Integer.toString(startSpectralSelection));
+                sos.setAttribute("endSpectralSelection",
+                                 Integer.toString(endSpectralSelection));
+                sos.setAttribute("approxHigh", Integer.toString(approxHigh));
+                sos.setAttribute("approxLow", Integer.toString(approxLow));
+                for(int i = 0; i < numScanComponents; i++) {
+                    IIOMetadataNode scanComponentSpec =
+                        new IIOMetadataNode("scanComponentSpec");
+                    scanComponentSpec.setAttribute("componentSelector",
+                                                   Integer.toString(componentSelector[i]));
+                    scanComponentSpec.setAttribute("dcHuffTable",
+                                                   Integer.toString(dcHuffTable[i]));
+                    scanComponentSpec.setAttribute("acHuffTable",
+                                                   Integer.toString(acHuffTable[i]));
+                    sos.appendChild(scanComponentSpec);
+                }
+                markerSequence.appendChild(sos);
+                break;
             }
         }
 
@@ -1009,9 +1087,8 @@ public class CLibJPEGMetadata extends IIOMetadata {
 
     // Standard tree node methods
 
-    @Override
     protected IIOMetadataNode getStandardChromaNode() {
-        if (!sofPresent) {
+        if(!sofPresent) {
             // No image, so no chroma
             return null;
         }
@@ -1022,11 +1099,12 @@ public class CLibJPEGMetadata extends IIOMetadata {
 
         IIOMetadataNode numChanNode = new IIOMetadataNode("NumChannels");
         chroma.appendChild(numChanNode);
-        numChanNode.setAttribute("value", Integer.toString(numFrameComponents));
+        numChanNode.setAttribute("value",
+                                 Integer.toString(numFrameComponents));
 
         // Check JFIF presence.
-        if (app0JFIFPresent) {
-            if (numFrameComponents == 1) {
+        if(app0JFIFPresent) {
+            if(numFrameComponents == 1) {
                 csType.setAttribute("name", "GRAY");
             } else {
                 csType.setAttribute("name", "YCbCr");
@@ -1035,21 +1113,21 @@ public class CLibJPEGMetadata extends IIOMetadata {
         }
 
         // How about an Adobe marker segment?
-        if (app14AdobePresent) {
-            switch (transform) {
-                case ADOBE_TRANSFORM_YCCK: // YCCK
-                    csType.setAttribute("name", "YCCK");
-                    break;
-                case ADOBE_TRANSFORM_YCC: // YCC
-                    csType.setAttribute("name", "YCbCr");
-                    break;
-                case ADOBE_TRANSFORM_UNKNOWN: // Unknown
-                    if (numFrameComponents == 3) {
-                        csType.setAttribute("name", "RGB");
-                    } else if (numFrameComponents == 4) {
-                        csType.setAttribute("name", "CMYK");
-                    }
-                    break;
+        if(app14AdobePresent){
+            switch(transform) {
+            case ADOBE_TRANSFORM_YCCK: // YCCK
+                csType.setAttribute("name", "YCCK");
+                break;
+            case ADOBE_TRANSFORM_YCC: // YCC
+                csType.setAttribute("name", "YCbCr");
+                break;
+            case ADOBE_TRANSFORM_UNKNOWN: // Unknown
+                if(numFrameComponents == 3) {
+                    csType.setAttribute("name", "RGB");
+                } else if(numFrameComponents == 4) {
+                    csType.setAttribute("name", "CMYK");
+                }
+                break;
             }
             return chroma;
         }
@@ -1057,10 +1135,10 @@ public class CLibJPEGMetadata extends IIOMetadata {
         // Initially assume no opacity.
         hasAlpha = false;
 
-        // Neither marker. Check components
-        if (numFrameComponents < 3) {
+        // Neither marker.  Check components
+        if(numFrameComponents < 3) {
             csType.setAttribute("name", "GRAY");
-            if (numFrameComponents == 2) {
+            if(numFrameComponents == 2) {
                 hasAlpha = true;
             }
             return chroma;
@@ -1068,38 +1146,43 @@ public class CLibJPEGMetadata extends IIOMetadata {
 
         boolean idsAreJFIF = true;
 
-        for (int i = 0; i < componentId.length; i++) {
+        for(int i = 0; i < componentId.length; i++) {
             int id = componentId[i];
-            if ((id < 1) || (id >= componentId.length)) {
+            if((id < 1) || (id >= componentId.length)) {
                 idsAreJFIF = false;
             }
         }
-
-        if (idsAreJFIF) {
+        
+        if(idsAreJFIF) {
             csType.setAttribute("name", "YCbCr");
-            if (numFrameComponents == 4) {
+            if(numFrameComponents == 4) {
                 hasAlpha = true;
             }
             return chroma;
         }
 
         // Check against the letters
-        if (componentId[0] == 'R' && componentId[1] == 'G' && componentId[2] == 'B') {
+        if(componentId[0] == 'R' &&
+           componentId[1] == 'G' &&
+           componentId[2] == 'B'){
             csType.setAttribute("name", "RGB");
-            if (numFrameComponents == 4 && componentId[3] == 'A') {
+            if(numFrameComponents == 4 && componentId[3] == 'A') {
                 hasAlpha = true;
             }
             return chroma;
         }
-
-        if (componentId[0] == 'Y' && componentId[1] == 'C' && componentId[2] == 'c') {
+        
+        if(componentId[0] == 'Y' &&
+           componentId[1] == 'C' &&
+           componentId[2] == 'c'){
             csType.setAttribute("name", "PhotoYCC");
-            if (numFrameComponents == 4 && componentId[3] == 'A') {
+            if(numFrameComponents == 4 &&
+               componentId[3] == 'A') {
                 hasAlpha = true;
-            }
+            }            
             return chroma;
         }
-
+        
         // Finally, 3-channel subsampled are YCbCr, unsubsampled are RGB
         // 4-channel subsampled are YCbCrA, unsubsampled are CMYK
 
@@ -1108,23 +1191,24 @@ public class CLibJPEGMetadata extends IIOMetadata {
         int hfactor = hSamplingFactor[0];
         int vfactor = vSamplingFactor[0];
 
-        for (int i = 1; i < componentId.length; i++) {
-            if (hSamplingFactor[i] != hfactor || vSamplingFactor[i] != vfactor) {
+        for(int i = 1; i < componentId.length; i++) {
+            if(hSamplingFactor[i] != hfactor ||
+               vSamplingFactor[i] != vfactor){
                 subsampled = true;
                 break;
             }
         }
 
-        if (subsampled) {
+        if(subsampled) {
             csType.setAttribute("name", "YCbCr");
-            if (numFrameComponents == 4) {
+            if(numFrameComponents == 4) {
                 hasAlpha = true;
             }
             return chroma;
         }
-
-        // Not subsampled. numFrameComponents < 3 is taken care of above
-        if (numFrameComponents == 3) {
+         
+        // Not subsampled.  numFrameComponents < 3 is taken care of above
+        if(numFrameComponents == 3) {
             csType.setAttribute("name", "RGB");
         } else {
             csType.setAttribute("name", "CMYK");
@@ -1133,21 +1217,23 @@ public class CLibJPEGMetadata extends IIOMetadata {
         return chroma;
     }
 
-    @Override
     protected IIOMetadataNode getStandardCompressionNode() {
         IIOMetadataNode compression = null;
 
-        if (sofPresent || sosPresent) {
+        if(sofPresent || sosPresent) {
             compression = new IIOMetadataNode("Compression");
 
-            if (sofPresent) {
+            if(sofPresent) {
                 // Process 55 is JPEG-LS, others are lossless JPEG.
                 boolean isLossless =
-                    sofProcess == 3 || sofProcess == 7 || sofProcess == 11 || sofProcess == 15 || sofProcess == 55;
+                    sofProcess == 3 || sofProcess == 7 || sofProcess == 11 ||
+                    sofProcess == 15 || sofProcess == 55;
 
                 // CompressionTypeName
-                IIOMetadataNode name = new IIOMetadataNode("CompressionTypeName");
-                String compressionType = isLossless ? (sofProcess == 55 ? "JPEG-LS" : "JPEG-LOSSLESS") : "JPEG";
+                IIOMetadataNode name =
+                    new IIOMetadataNode("CompressionTypeName");
+                String compressionType = isLossless ?
+                    (sofProcess == 55 ? "JPEG-LS" : "JPEG-LOSSLESS") : "JPEG";
                 name.setAttribute("value", compressionType);
                 compression.appendChild(name);
 
@@ -1157,8 +1243,9 @@ public class CLibJPEGMetadata extends IIOMetadata {
                 compression.appendChild(lossless);
             }
 
-            if (sosPresent) {
-                IIOMetadataNode prog = new IIOMetadataNode("NumProgressiveScans");
+            if(sosPresent) {
+                IIOMetadataNode prog =
+                    new IIOMetadataNode("NumProgressiveScans");
                 prog.setAttribute("value", "1");
                 compression.appendChild(prog);
             }
@@ -1167,55 +1254,58 @@ public class CLibJPEGMetadata extends IIOMetadata {
         return compression;
     }
 
-    @Override
     protected IIOMetadataNode getStandardDimensionNode() {
         IIOMetadataNode dim = new IIOMetadataNode("Dimension");
         IIOMetadataNode orient = new IIOMetadataNode("ImageOrientation");
         orient.setAttribute("value", "normal");
         dim.appendChild(orient);
 
-        if (app0JFIFPresent) {
+        if(app0JFIFPresent) {
             float aspectRatio;
-            if (resUnits == JFIF_RESUNITS_ASPECT) {
+            if(resUnits == JFIF_RESUNITS_ASPECT) {
                 // Aspect ratio.
-                aspectRatio = (float) Xdensity / (float) Ydensity;
+                aspectRatio = (float)Xdensity/(float)Ydensity;
             } else {
                 // Density.
-                aspectRatio = (float) Ydensity / (float) Xdensity;
+                aspectRatio = (float)Ydensity/(float)Xdensity;
             }
             IIOMetadataNode aspect = new IIOMetadataNode("PixelAspectRatio");
             aspect.setAttribute("value", Float.toString(aspectRatio));
             dim.insertBefore(aspect, orient);
 
-            if (resUnits != JFIF_RESUNITS_ASPECT) {
+            if(resUnits != JFIF_RESUNITS_ASPECT) {
                 // 1 == dpi, 2 == dpc
                 float scale = (resUnits == JFIF_RESUNITS_DPI) ? 25.4F : 10.0F;
 
-                IIOMetadataNode horiz = new IIOMetadataNode("HorizontalPixelSize");
-                horiz.setAttribute("value", Float.toString(scale / Xdensity));
+                IIOMetadataNode horiz = 
+                    new IIOMetadataNode("HorizontalPixelSize");
+                horiz.setAttribute("value", 
+                                   Float.toString(scale/Xdensity));
                 dim.appendChild(horiz);
 
-                IIOMetadataNode vert = new IIOMetadataNode("VerticalPixelSize");
-                vert.setAttribute("value", Float.toString(scale / Ydensity));
+                IIOMetadataNode vert = 
+                    new IIOMetadataNode("VerticalPixelSize");
+                vert.setAttribute("value", 
+                                  Float.toString(scale/Ydensity));
                 dim.appendChild(vert);
             }
         }
         return dim;
     }
 
-    @Override
     protected IIOMetadataNode getStandardTextNode() {
         IIOMetadataNode text = null;
-        if (comPresent) {
+        if(comPresent) {
             text = new IIOMetadataNode("Text");
             Iterator iter = comments.iterator();
             while (iter.hasNext()) {
                 IIOMetadataNode entry = new IIOMetadataNode("TextEntry");
                 entry.setAttribute("keyword", "comment");
-                byte[] data = (byte[]) iter.next();
+                byte[] data = (byte[])iter.next();
                 try {
-                    entry.setAttribute("value", new String(data, "ISO-8859-1"));
-                } catch (UnsupportedEncodingException e) {
+                    entry.setAttribute("value",
+                                       new String(data, "ISO-8859-1"));
+                } catch(UnsupportedEncodingException e) {
                     entry.setAttribute("value", new String(data));
                 }
                 text.appendChild(entry);
@@ -1226,7 +1316,6 @@ public class CLibJPEGMetadata extends IIOMetadata {
 
     // This method assumes that getStandardChromaNode() has already been
     // called to initialize hasAlpha.
-    @Override
     protected IIOMetadataNode getStandardTransparencyNode() {
         IIOMetadataNode trans = null;
         if (hasAlpha == true) {
@@ -1245,119 +1334,149 @@ public class CLibJPEGMetadata extends IIOMetadata {
 
         BaselineTIFFTagSet base = BaselineTIFFTagSet.getInstance();
 
-        TIFFDirectory dir = new TIFFDirectory(new TIFFTagSet[] { base, EXIFParentTIFFTagSet.getInstance() }, null);
+        TIFFDirectory dir =
+            new TIFFDirectory(new TIFFTagSet[] {
+                base, EXIFParentTIFFTagSet.getInstance()
+            }, null);
 
-        if (sofPresent) {
+        if(sofPresent) {
             // sofProcess -> Compression ?
             int compression = BaselineTIFFTagSet.COMPRESSION_JPEG;
-            TIFFField compressionField = new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_COMPRESSION), compression);
+            TIFFField compressionField =
+                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_COMPRESSION),
+                              compression);
             dir.addTIFFField(compressionField);
 
             // samplePrecision -> BitsPerSample
             char[] bitsPerSample = new char[numFrameComponents];
-            Arrays.fill(bitsPerSample, (char) (samplePrecision & 0xff));
+            Arrays.fill(bitsPerSample, (char)(samplePrecision & 0xff));
             TIFFField bitsPerSampleField =
-                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_BITS_PER_SAMPLE), TIFFTag.TIFF_SHORT,
-                    bitsPerSample.length, bitsPerSample);
+                new TIFFField(
+                              base.getTag(BaselineTIFFTagSet.TAG_BITS_PER_SAMPLE),
+                              TIFFTag.TIFF_SHORT,
+                              bitsPerSample.length,
+                              bitsPerSample);
             dir.addTIFFField(bitsPerSampleField);
 
             // numLines -> ImageLength
-            TIFFField imageLengthField = new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_IMAGE_LENGTH), numLines);
+            TIFFField imageLengthField =
+                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_IMAGE_LENGTH),
+                              numLines);
             dir.addTIFFField(imageLengthField);
 
             // samplesPerLine -> ImageWidth
-            TIFFField imageWidthField = new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_IMAGE_WIDTH), samplesPerLine);
+            TIFFField imageWidthField =
+                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_IMAGE_WIDTH),
+                              samplesPerLine);
             dir.addTIFFField(imageWidthField);
 
             // numFrameComponents -> SamplesPerPixel
             TIFFField samplesPerPixelField =
-                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_SAMPLES_PER_PIXEL), numFrameComponents);
+                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_SAMPLES_PER_PIXEL),
+                              numFrameComponents);
             dir.addTIFFField(samplesPerPixelField);
 
             // componentId -> PhotometricInterpretation + ExtraSamples
             IIOMetadataNode chroma = getStandardChromaNode();
-            if (chroma != null) {
-                IIOMetadataNode csType = (IIOMetadataNode) chroma.getElementsByTagName("ColorSpaceType").item(0);
+            if(chroma != null) {
+                IIOMetadataNode csType =
+                    (IIOMetadataNode)chroma.getElementsByTagName("ColorSpaceType").item(0);
                 String name = csType.getAttribute("name");
                 int photometricInterpretation = -1;
-                if (name.equals("GRAY")) {
-                    photometricInterpretation = BaselineTIFFTagSet.PHOTOMETRIC_INTERPRETATION_BLACK_IS_ZERO;
-                } else if (name.equals("YCbCr") || name.equals("PhotoYCC")) {
+                if(name.equals("GRAY")) {
+                    photometricInterpretation =
+                        BaselineTIFFTagSet.PHOTOMETRIC_INTERPRETATION_BLACK_IS_ZERO;
+                } else if(name.equals("YCbCr") || name.equals("PhotoYCC")) {
                     // NOTE: PhotoYCC -> YCbCr
-                    photometricInterpretation = BaselineTIFFTagSet.PHOTOMETRIC_INTERPRETATION_Y_CB_CR;
-                } else if (name.equals("RGB")) {
-                    photometricInterpretation = BaselineTIFFTagSet.PHOTOMETRIC_INTERPRETATION_RGB;
-                } else if (name.equals("CMYK") || name.equals("YCCK")) {
+                    photometricInterpretation =
+                        BaselineTIFFTagSet.PHOTOMETRIC_INTERPRETATION_Y_CB_CR;
+                } else if(name.equals("RGB")) {
+                    photometricInterpretation =
+                        BaselineTIFFTagSet.PHOTOMETRIC_INTERPRETATION_RGB;
+                } else if(name.equals("CMYK") || name.equals("YCCK")) {
                     // NOTE: YCCK -> CMYK
-                    photometricInterpretation = BaselineTIFFTagSet.PHOTOMETRIC_INTERPRETATION_CMYK;
+                    photometricInterpretation =
+                        BaselineTIFFTagSet.PHOTOMETRIC_INTERPRETATION_CMYK;
                 }
 
-                if (photometricInterpretation != -1) {
+                if(photometricInterpretation != -1) {
                     TIFFField photometricInterpretationField =
                         new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_PHOTOMETRIC_INTERPRETATION),
-                            photometricInterpretation);
+                                      photometricInterpretation);
                     dir.addTIFFField(photometricInterpretationField);
                 }
 
-                if (hasAlpha) {
-                    char[] extraSamples = new char[] { BaselineTIFFTagSet.EXTRA_SAMPLES_ASSOCIATED_ALPHA };
+                if(hasAlpha) {
+                    char[] extraSamples =
+                        new char[] {BaselineTIFFTagSet.EXTRA_SAMPLES_ASSOCIATED_ALPHA};
                     TIFFField extraSamplesField =
-                        new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_EXTRA_SAMPLES), TIFFTag.TIFF_SHORT,
-                            extraSamples.length, extraSamples);
+                        new TIFFField(
+                                      base.getTag(BaselineTIFFTagSet.TAG_EXTRA_SAMPLES),
+                                      TIFFTag.TIFF_SHORT,
+                                      extraSamples.length,
+                                      extraSamples);
                     dir.addTIFFField(extraSamplesField);
                 }
             } // chroma != null
         } // sofPresent
 
         // JFIF APP0 -> Resolution fields.
-        if (app0JFIFPresent) {
-            long[][] xResolution = new long[][] { { Xdensity, 1 } };
+        if(app0JFIFPresent) {
+            long[][] xResolution = new long[][] {{Xdensity, 1}};
             TIFFField XResolutionField =
-                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_X_RESOLUTION), TIFFTag.TIFF_RATIONAL, 1, xResolution);
+                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_X_RESOLUTION),
+                              TIFFTag.TIFF_RATIONAL,
+                              1,
+                              xResolution);
             dir.addTIFFField(XResolutionField);
 
-            long[][] yResolution = new long[][] { { Ydensity, 1 } };
+            long[][] yResolution = new long[][] {{Ydensity, 1}};
             TIFFField YResolutionField =
-                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_Y_RESOLUTION), TIFFTag.TIFF_RATIONAL, 1, yResolution);
+                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_Y_RESOLUTION),
+                              TIFFTag.TIFF_RATIONAL,
+                              1,
+                              yResolution);
             dir.addTIFFField(YResolutionField);
 
             int resolutionUnit = BaselineTIFFTagSet.RESOLUTION_UNIT_NONE;
-            switch (resUnits) {
-                case JFIF_RESUNITS_ASPECT:
-                    resolutionUnit = BaselineTIFFTagSet.RESOLUTION_UNIT_NONE;
-                case JFIF_RESUNITS_DPI:
-                    resolutionUnit = BaselineTIFFTagSet.RESOLUTION_UNIT_INCH;
-                    break;
-                case JFIF_RESUNITS_DPC:
-                    resolutionUnit = BaselineTIFFTagSet.RESOLUTION_UNIT_CENTIMETER;
-                    break;
+            switch(resUnits) {
+            case JFIF_RESUNITS_ASPECT:
+                resolutionUnit = BaselineTIFFTagSet.RESOLUTION_UNIT_NONE;
+            case JFIF_RESUNITS_DPI:
+                resolutionUnit = BaselineTIFFTagSet.RESOLUTION_UNIT_INCH;
+                break;
+            case JFIF_RESUNITS_DPC:
+                resolutionUnit = BaselineTIFFTagSet.RESOLUTION_UNIT_CENTIMETER;
+                break;
             }
             TIFFField ResolutionUnitField =
-                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_RESOLUTION_UNIT), resolutionUnit);
+                new TIFFField(base.getTag
+                              (BaselineTIFFTagSet.TAG_RESOLUTION_UNIT),
+                              resolutionUnit);
             dir.addTIFFField(ResolutionUnitField);
         }
 
         // DQT + DHT -> JPEGTables.
         byte[] jpegTablesData = null;
-        if (dqtPresent || dqtPresent) {
+        if(dqtPresent || dqtPresent) {
             // Determine length of JPEGTables data.
             int jpegTablesLength = 2; // SOI
-            if (dqtPresent) {
+            if(dqtPresent) {
                 Iterator dqts = qtables.iterator();
-                while (dqts.hasNext()) {
-                    Iterator qtiter = ((List) dqts.next()).iterator();
-                    while (qtiter.hasNext()) {
-                        QTable qt = (QTable) qtiter.next();
+                while(dqts.hasNext()) {
+                    Iterator qtiter = ((List)dqts.next()).iterator();
+                    while(qtiter.hasNext()) {
+                        QTable qt = (QTable)qtiter.next();
                         jpegTablesLength += 4 + qt.length;
                     }
                 }
             }
-            if (dhtPresent) {
+            if(dhtPresent) {
                 Iterator dhts = htables.iterator();
-                while (dhts.hasNext()) {
-                    Iterator htiter = ((List) dhts.next()).iterator();
-                    while (htiter.hasNext()) {
-                        HuffmanTable ht = (HuffmanTable) htiter.next();
+                while(dhts.hasNext()) {
+                    Iterator htiter = ((List)dhts.next()).iterator();
+                    while(htiter.hasNext()) {
+                        HuffmanTable ht = (HuffmanTable)htiter.next();
                         jpegTablesLength += 4 + ht.length;
                     }
                 }
@@ -1368,83 +1487,95 @@ public class CLibJPEGMetadata extends IIOMetadata {
             jpegTablesData = new byte[jpegTablesLength];
 
             // SOI
-            jpegTablesData[0] = (byte) 0xff;
-            jpegTablesData[1] = (byte) SOI;
+            jpegTablesData[0] = (byte)0xff;
+            jpegTablesData[1] = (byte)SOI;
             int jpoff = 2;
 
-            if (dqtPresent) {
+            if(dqtPresent) {
                 Iterator dqts = qtables.iterator();
-                while (dqts.hasNext()) {
-                    Iterator qtiter = ((List) dqts.next()).iterator();
-                    while (qtiter.hasNext()) {
-                        jpegTablesData[jpoff++] = (byte) 0xff;
-                        jpegTablesData[jpoff++] = (byte) DQT;
-                        QTable qt = (QTable) qtiter.next();
+                while(dqts.hasNext()) {
+                    Iterator qtiter = ((List)dqts.next()).iterator();
+                    while(qtiter.hasNext()) {
+                        jpegTablesData[jpoff++] = (byte)0xff;
+                        jpegTablesData[jpoff++] = (byte)DQT;
+                        QTable qt = (QTable)qtiter.next();
                         int qtlength = qt.length + 2;
-                        jpegTablesData[jpoff++] = (byte) ((qtlength & 0xff00) >> 8);
-                        jpegTablesData[jpoff++] = (byte) (qtlength & 0xff);
-                        jpegTablesData[jpoff++] = (byte) (((qt.elementPrecision & 0xf0) << 4) | (qt.tableID & 0x0f));
+                        jpegTablesData[jpoff++] =
+                            (byte)((qtlength & 0xff00) >> 8);
+                        jpegTablesData[jpoff++] = (byte)(qtlength & 0xff);
+                        jpegTablesData[jpoff++] =
+                            (byte)(((qt.elementPrecision & 0xf0) << 4) |
+                                   (qt.tableID & 0x0f));
                         int[] table = qt.table.getTable();
                         int qlen = table.length;
-                        for (int i = 0; i < qlen; i++) {
-                            jpegTablesData[jpoff + zigzag[i]] = (byte) table[i];
+                        for(int i = 0; i < qlen; i++) {
+                            jpegTablesData[jpoff + zigzag[i]] = (byte)table[i];
                         }
                         jpoff += qlen;
                     }
                 }
             }
 
-            if (dhtPresent) {
+            if(dhtPresent) {
                 Iterator dhts = htables.iterator();
-                while (dhts.hasNext()) {
-                    Iterator htiter = ((List) dhts.next()).iterator();
-                    while (htiter.hasNext()) {
-                        jpegTablesData[jpoff++] = (byte) 0xff;
-                        jpegTablesData[jpoff++] = (byte) DHT;
-                        HuffmanTable ht = (HuffmanTable) htiter.next();
+                while(dhts.hasNext()) {
+                    Iterator htiter = ((List)dhts.next()).iterator();
+                    while(htiter.hasNext()) {
+                        jpegTablesData[jpoff++] = (byte)0xff;
+                        jpegTablesData[jpoff++] = (byte)DHT;
+                        HuffmanTable ht = (HuffmanTable)htiter.next();
                         int htlength = ht.length + 2;
-                        jpegTablesData[jpoff++] = (byte) ((htlength & 0xff00) >> 8);
-                        jpegTablesData[jpoff++] = (byte) (htlength & 0xff);
-                        jpegTablesData[jpoff++] = (byte) (((ht.tableClass & 0x0f) << 4) | (ht.tableID & 0x0f));
+                        jpegTablesData[jpoff++] =
+                            (byte)((htlength & 0xff00) >> 8);
+                        jpegTablesData[jpoff++] = (byte)(htlength & 0xff);
+                        jpegTablesData[jpoff++] =
+                            (byte)(((ht.tableClass & 0x0f) << 4) |
+                                   (ht.tableID & 0x0f));
                         short[] lengths = ht.table.getLengths();
                         int numLengths = lengths.length;
-                        for (int i = 0; i < numLengths; i++) {
-                            jpegTablesData[jpoff++] = (byte) lengths[i];
+                        for(int i = 0; i < numLengths; i++) {
+                            jpegTablesData[jpoff++] = (byte)lengths[i];
                         }
                         short[] values = ht.table.getValues();
                         int numValues = values.length;
-                        for (int i = 0; i < numValues; i++) {
-                            jpegTablesData[jpoff++] = (byte) values[i];
+                        for(int i = 0; i < numValues; i++) {
+                            jpegTablesData[jpoff++] = (byte)values[i];
                         }
                     }
                 }
             }
 
-            jpegTablesData[jpoff++] = (byte) 0xff;
-            jpegTablesData[jpoff] = (byte) EOI;
+            jpegTablesData[jpoff++] = (byte)0xff;
+            jpegTablesData[jpoff] = (byte)EOI;            
         }
-        if (jpegTablesData != null) {
+        if(jpegTablesData != null) {
             TIFFField JPEGTablesField =
-                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_JPEG_TABLES), TIFFTag.TIFF_UNDEFINED,
-                    jpegTablesData.length, jpegTablesData);
+                new TIFFField(base.getTag(BaselineTIFFTagSet.TAG_JPEG_TABLES),
+                              TIFFTag.TIFF_UNDEFINED,
+                              jpegTablesData.length,
+                              jpegTablesData);
             dir.addTIFFField(JPEGTablesField);
         }
 
         IIOMetadata tiffMetadata = dir.getAsMetadata();
 
-        if (exifData != null) {
+        if(exifData != null) {
             try {
-                Iterator tiffReaders = ImageIO.getImageReadersByFormatName("TIFF");
-                if (tiffReaders != null && tiffReaders.hasNext()) {
-                    ImageReader tiffReader = (ImageReader) tiffReaders.next();
-                    ByteArrayInputStream bais = new ByteArrayInputStream(exifData);
-                    ImageInputStream exifStream = new MemoryCacheImageInputStream(bais);
+                Iterator tiffReaders =
+                    ImageIO.getImageReadersByFormatName("TIFF");
+                if(tiffReaders != null && tiffReaders.hasNext()) {
+                    ImageReader tiffReader = (ImageReader)tiffReaders.next();
+                    ByteArrayInputStream bais =
+                        new ByteArrayInputStream(exifData);
+                    ImageInputStream exifStream =
+                        new MemoryCacheImageInputStream(bais);
                     tiffReader.setInput(exifStream);
                     IIOMetadata exifMetadata = tiffReader.getImageMetadata(0);
-                    tiffMetadata.mergeTree(metadataName, exifMetadata.getAsTree(metadataName));
+                    tiffMetadata.mergeTree(metadataName,
+                                           exifMetadata.getAsTree(metadataName));
                     tiffReader.reset();
                 }
-            } catch (IOException ioe) {
+            } catch(IOException ioe) {
                 // Ignore it.
             }
         }
@@ -1455,42 +1586,48 @@ public class CLibJPEGMetadata extends IIOMetadata {
     // Thumbnail methods
 
     private void initializeThumbnails() {
-        synchronized (thumbnails) {
-            if (!thumbnailsInitialized) {
+        synchronized(thumbnails) {
+            if(!thumbnailsInitialized) {
                 // JFIF/JFXX are not supposed to coexist in the same
                 // JPEG stream but in reality sometimes they do.
 
                 // JFIF thumbnail
-                if (app0JFIFPresent && jfifThumbnail != null) {
+                if(app0JFIFPresent && jfifThumbnail != null) {
                     thumbnails.add(jfifThumbnail);
                 }
 
                 // JFXX thumbnail(s)
-                if (app0JFXXPresent && jfxxThumbnails != null) {
+                if(app0JFXXPresent && jfxxThumbnails != null) {
                     int numJFXX = jfxxThumbnails.size();
-                    for (int i = 0; i < numJFXX; i++) {
-                        IIOImage img = (IIOImage) jfxxThumbnails.get(i);
-                        BufferedImage jfxxThumbnail = (BufferedImage) img.getRenderedImage();
+                    for(int i = 0; i < numJFXX; i++) {
+                        IIOImage img = (IIOImage)jfxxThumbnails.get(i);
+                        BufferedImage jfxxThumbnail =
+                            (BufferedImage)img.getRenderedImage();
                         thumbnails.add(jfxxThumbnail);
                     }
                 }
 
                 // EXIF thumbnail
-                if (exifData != null) {
+                if(exifData != null) {
                     try {
-                        Iterator tiffReaders = ImageIO.getImageReadersByFormatName("TIFF");
-                        if (tiffReaders != null && tiffReaders.hasNext()) {
-                            ImageReader tiffReader = (ImageReader) tiffReaders.next();
-                            ByteArrayInputStream bais = new ByteArrayInputStream(exifData);
-                            ImageInputStream exifStream = new MemoryCacheImageInputStream(bais);
+                        Iterator tiffReaders =
+                            ImageIO.getImageReadersByFormatName("TIFF");
+                        if(tiffReaders != null && tiffReaders.hasNext()) {
+                            ImageReader tiffReader =
+                                (ImageReader)tiffReaders.next();
+                            ByteArrayInputStream bais =
+                                new ByteArrayInputStream(exifData);
+                            ImageInputStream exifStream =
+                                new MemoryCacheImageInputStream(bais);
                             tiffReader.setInput(exifStream);
-                            if (tiffReader.getNumImages(true) > 1) {
-                                BufferedImage exifThumbnail = tiffReader.read(1, null);
+                            if(tiffReader.getNumImages(true) > 1) {
+                                BufferedImage exifThumbnail =
+                                    tiffReader.read(1, null);
                                 thumbnails.add(exifThumbnail);
                             }
                             tiffReader.reset();
                         }
-                    } catch (IOException ioe) {
+                    } catch(IOException ioe) {
                         // Ignore it.
                     }
                 }
@@ -1506,16 +1643,17 @@ public class CLibJPEGMetadata extends IIOMetadata {
     }
 
     public BufferedImage getThumbnail(int thumbnailIndex) throws IOException {
-        if (thumbnailIndex < 0) {
+        if(thumbnailIndex < 0) {
             throw new IndexOutOfBoundsException("thumbnailIndex < 0!");
         }
 
         initializeThumbnails();
 
-        if (thumbnailIndex >= thumbnails.size()) {
-            throw new IndexOutOfBoundsException("thumbnailIndex > getNumThumbnails()");
+        if(thumbnailIndex >= thumbnails.size()) {
+            throw new IndexOutOfBoundsException
+                ("thumbnailIndex > getNumThumbnails()");
         }
 
-        return (BufferedImage) thumbnails.get(thumbnailIndex);
+        return (BufferedImage)thumbnails.get(thumbnailIndex);
     }
 }
