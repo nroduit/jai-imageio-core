@@ -83,16 +83,10 @@ public class PackageUtil {
             isCodecLibAvailable = false;
         }
 
-        // Set version and vendor strings.
-        try {
-            Class thisClass =
-                Class.forName("com.sun.media.imageioimpl.common.PackageUtil");
-            Package thisPackage = thisClass.getPackage();
-            version = thisPackage.getImplementationVersion();
-            vendor = thisPackage.getImplementationVendor();
-	    specTitle = thisPackage.getSpecificationTitle();
-        } catch(ClassNotFoundException e) {
-        }
+        Package thisPackage = com.sun.media.imageioimpl.common.PackageUtil.class.getPackage();
+        version = thisPackage.getImplementationVersion();
+        vendor = thisPackage.getImplementationVendor();
+        specTitle = thisPackage.getSpecificationTitle();
     }
 
     /**

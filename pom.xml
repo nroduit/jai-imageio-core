@@ -84,10 +84,10 @@
 					<archive>
 						<manifestEntries>
 							<Specification-Title>Java Advanced Imaging Image I/O Tools</Specification-Title>
-							<Specification-Version>1.3</Specification-Version>
+							<Specification-Version>${project.version}</Specification-Version>
 							<Specification-Vendor>Sun Microsystems, Inc.</Specification-Vendor>
 							<Implementation-Title>com.sun.media.imageio</Implementation-Title>
-							<Implementation-Version>1.3</Implementation-Version>
+							<Implementation-Version>${project.version}</Implementation-Version>
 							<Implementation-Vendor>Sun Microsystems, Inc.</Implementation-Vendor>
 							<Extension-Name>com.sun.media.imageio</Extension-Name>
 							<Sealed>true</Sealed>
