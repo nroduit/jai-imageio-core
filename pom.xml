@@ -92,6 +92,7 @@
 							<Implementation-Vendor>Sun Microsystems, Inc.</Implementation-Vendor>
 							<Extension-Name>com.sun.media.imageio</Extension-Name>
 							<Sealed>true</Sealed>
+							<SPI-Provider>javax.imageio.spi.ImageInputStreamSpi,javax.imageio.spi.ImageOutputStreamSpi,javax.imageio.spi.ImageReaderSpi,javax.imageio.spi.ImageWriterSpi</SPI-Provider>
 						</manifestEntries>
 					</archive>
 				</configuration>
