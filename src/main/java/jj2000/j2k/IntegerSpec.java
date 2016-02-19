@@ -93,7 +93,6 @@ public class IntegerSpec extends ModuleSpec{
      *
      * @param type The allowed specifications type
      *
-     * @param optName The name of the option to process
      *
      * */
     public IntegerSpec(int nt, int nc, byte type, J2KImageWriteParamJava wp, String values,
